@@ -330,27 +330,49 @@ class ChatbotInterface:
         chat_created = active_chat.get("created_at", "")
         messages = active_chat.get("messages", [])
 
-        header_col1, header_col2, header_col3 = st.columns([0.70, 0.15, 0.15])
-        
-        with header_col1:
-            st.markdown(
-                f"<p style='font-size: 1.2rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.2rem;'>{chat_name}</p>",
-                unsafe_allow_html=True
-            )
-            st.markdown(
-                f"<p style='font-size: 0.78rem; color: #64748b; margin-bottom: 0;'>Started {chat_created}</p>",
-                unsafe_allow_html=True
-            )
-        
-        with header_col2:
-            if st.button("Rename", key="header_rename_btn"):
-                st.session_state.renaming_header = chat_id
-                st.rerun()
-        
-        with header_col3:
-            if st.button("Delete", key="header_delete_btn"):
-                self._delete_chat(chat_id)
-                st.rerun()
+        # Check if we're in rename mode
+        if st.session_state.get("renaming_header") == chat_id:
+            # Show rename input
+            col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
+            with col1:
+                new_name = st.text_input("Rename chat", value=chat_name, key="rename_input")
+            with col2:
+                st.write("")
+                st.write("")
+                if st.button("Save", key="save_rename_btn"):
+                    if new_name.strip():
+                        st.session_state.chats[chat_id]["name"] = new_name.strip()
+                    st.session_state.renaming_header = None
+                    st.rerun()
+            with col3:
+                st.write("")
+                st.write("")
+                if st.button("Cancel", key="cancel_rename_btn"):
+                    st.session_state.renaming_header = None
+                    st.rerun()
+        else:
+            # Normal header
+            header_col1, header_col2, header_col3 = st.columns([0.70, 0.15, 0.15])
+            
+            with header_col1:
+                st.markdown(
+                    f"<p style='font-size: 1.2rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.2rem;'>{chat_name}</p>",
+                    unsafe_allow_html=True
+                )
+                st.markdown(
+                    f"<p style='font-size: 0.78rem; color: #64748b; margin-bottom: 0;'>Started {chat_created}</p>",
+                    unsafe_allow_html=True
+                )
+            
+            with header_col2:
+                if st.button("Rename", key="header_rename_btn"):
+                    st.session_state.renaming_header = chat_id
+                    st.rerun()
+            
+            with header_col3:
+                if st.button("Delete", key="header_delete_btn"):
+                    self._delete_chat(chat_id)
+                    st.rerun()
 
         st.markdown(
             "<div style='height: 1px; background: rgba(148,163,184,0.2); margin: 0.6rem 0 1rem 0;'></div>",
