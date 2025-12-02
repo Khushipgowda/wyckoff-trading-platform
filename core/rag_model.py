@@ -221,7 +221,7 @@ class WyckoffRAG:
         
         return bool(symbol), symbol
 
-    def retrieve(self, query: str, top_k: int = 5, min_score: float = 0.05) -> List[RetrievedQA]:
+    def retrieve(self, query: str, top_k: int = 5, min_score: float = 0.01) -> List[RetrievedQA]:
         if not query.strip():
             return []
 
@@ -248,6 +248,15 @@ class WyckoffRAG:
     def _is_off_topic(self, query: str) -> bool:
         """Check if query is clearly off-topic or gibberish."""
         query_lower = query.lower().strip()
+        
+        # If query contains Wyckoff-related terms, it's NOT off-topic
+        wyckoff_terms = ['wyckoff', 'accumulation', 'distribution', 'markup', 'markdown',
+                        'spring', 'upthrust', 'volume', 'demand', 'supply', 'phase',
+                        'composite', 'trading', 'stock', 'market', 'price', 'trend',
+                        'support', 'resistance', 'breakout', 'test', 'signal', 'sos',
+                        'sign of strength', 'sign of weakness', 'climax', 'rally']
+        if any(term in query_lower for term in wyckoff_terms):
+            return False
         
         # Off-topic keywords
         off_topic_keywords = ['weather', 'news', 'sports', 'movie', 'music', 'food', 'recipe', 
@@ -498,5 +507,18 @@ If the user wants fundamentals, tell them they can request it by saying "Get fun
 
     def _fallback_answer(self, user_question: str) -> str:
         """Universal fallback for all unrecognized queries."""
+        query_lower = user_question.lower()
+        
+        # Check if it seems like a Wyckoff-related question
+        wyckoff_terms = ['wyckoff', 'accumulation', 'distribution', 'markup', 'markdown',
+                        'spring', 'upthrust', 'volume', 'demand', 'supply', 'phase',
+                        'composite', 'trading', 'stock', 'market', 'price', 'trend',
+                        'support', 'resistance', 'breakout', 'test', 'signal']
+        
+        if any(term in query_lower for term in wyckoff_terms):
+            # It's a Wyckoff question but we couldn't find a good match
+            return f"That's a great question about Wyckoff methodology. While I don't have a specific answer for '{user_question[:40]}{'...' if len(user_question) > 40 else ''}', I can help you with related topics like market phases, Spring tests, volume analysis, or run a stock analysis. Try rephrasing or ask about a specific concept."
+        
+        # Generic off-topic fallback
         short_query = user_question[:50] + ('...' if len(user_question) > 50 else '')
         return f"I understand you're asking about '{short_query}'. I'm specialized in Wyckoff trading methodology and stock analysis. I can help you with market phase analysis, trading signals, stock backtesting, and company fundamentals. Could you try asking about accumulation/distribution phases, Spring tests, or request a stock analysis like 'Analyze AAPL last year'?"
