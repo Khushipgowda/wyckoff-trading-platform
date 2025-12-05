@@ -1,16 +1,5 @@
 # core/transformer_model.py
-"""
-FULLY HAND-CODED Transformer for Wyckoff Chatbot.
 
-Every component is implemented from scratch:
-- Multi-Head Attention
-- Positional Encoding  
-- Feed-Forward Networks
-- Layer Normalization
-- Encoder & Decoder Stacks
-
-NO use of nn.Transformer or any pre-built transformer modules.
-"""
 
 from __future__ import annotations
 
