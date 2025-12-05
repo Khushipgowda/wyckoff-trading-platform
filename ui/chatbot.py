@@ -5,17 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
+from pathlib import Path
 
 import streamlit as st
 
 from core.rag_model import WyckoffRAG
 from core.backtest import WyckoffBacktester
 from core.fundamentals import FundamentalsService
+from core.transformer_model import TransformerService
 
 
 class ChatbotInterface:
     """
-    Chat interface with analysis and fundamentals capabilities.
+    Chat interface with dual model support (RAG and Transformer).
+    Includes analysis and fundamentals capabilities.
     """
 
     def __init__(self, rag: WyckoffRAG):
@@ -24,6 +27,28 @@ class ChatbotInterface:
         self.fundamentals_service = FundamentalsService()
         self.rag.set_backtester(self.backtester)
         self.rag.set_fundamentals_service(self.fundamentals_service)
+        
+        # Initialize Transformer service
+        self.transformer_service: Optional[TransformerService] = None
+        self._init_transformer()
+
+    def _init_transformer(self):
+        """Initialize the Transformer model if available."""
+        model_paths = [
+            Path("wyckoff_chatbot.pth"),
+            Path("models/wyckoff_chatbot.pth"),
+            Path("core/wyckoff_chatbot.pth"),
+        ]
+        
+        for path in model_paths:
+            if path.exists():
+                self.transformer_service = TransformerService(str(path))
+                if self.transformer_service.is_loaded:
+                    print(f"Transformer model loaded from {path}")
+                    return
+        
+        self.transformer_service = TransformerService()
+        print("Transformer model not found. Transformer mode will be unavailable.")
 
     def render(self):
         self._ensure_state()
@@ -164,10 +189,85 @@ class ChatbotInterface:
                 color: #2dd4bf;
             }
             
+            .msg-bot-avatar.transformer {
+                border: 1px solid rgba(168,85,247,0.5);
+                color: #a855f7;
+            }
+            
             .msg-bot-time {
                 font-size: 0.65rem;
                 color: #475569;
                 margin-top: 0.35rem;
+            }
+            
+            /* Model Toggle Styles */
+            .model-toggle-container {
+                margin-top: 1.5rem;
+                padding-top: 1rem;
+                border-top: 1px solid rgba(148,163,184,0.1);
+            }
+            
+            .model-toggle-label {
+                font-size: 0.68rem;
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                color: #475569;
+                margin-bottom: 0.6rem;
+            }
+            
+            .model-toggle-wrapper {
+                display: flex;
+                background: rgba(15,23,42,0.6);
+                border: 1px solid rgba(148,163,184,0.15);
+                border-radius: 8px;
+                padding: 4px;
+                gap: 4px;
+            }
+            
+            .model-toggle-btn {
+                flex: 1;
+                padding: 0.5rem 0.75rem;
+                border-radius: 6px;
+                font-size: 0.75rem;
+                font-weight: 500;
+                text-align: center;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                border: none;
+                background: transparent;
+                color: #64748b;
+            }
+            
+            .model-toggle-btn.active {
+                background: linear-gradient(135deg, rgba(34,211,238,0.15), rgba(56,189,248,0.1));
+                color: #22d3ee;
+                border: 1px solid rgba(34,211,238,0.3);
+            }
+            
+            .model-toggle-btn.active.transformer {
+                background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(139,92,246,0.1));
+                color: #a855f7;
+                border: 1px solid rgba(168,85,247,0.3);
+            }
+            
+            .model-toggle-btn:hover:not(.active) {
+                background: rgba(30,41,59,0.5);
+                color: #94a3b8;
+            }
+            
+            .model-status {
+                font-size: 0.65rem;
+                color: #475569;
+                margin-top: 0.5rem;
+                text-align: center;
+            }
+            
+            .model-status.active-rag {
+                color: #2dd4bf;
+            }
+            
+            .model-status.active-transformer {
+                color: #a855f7;
             }
             </style>
         """, unsafe_allow_html=True)
@@ -187,6 +287,9 @@ class ChatbotInterface:
         
         if "renaming_chat" not in st.session_state:
             st.session_state.renaming_chat = None
+        
+        if "selected_model" not in st.session_state:
+            st.session_state.selected_model = "rag"
 
     def _create_new_chat(self, name: Optional[str] = None) -> str:
         chat_id = str(uuid.uuid4())
@@ -227,13 +330,14 @@ class ChatbotInterface:
             chat_id = self._create_new_chat()
         return st.session_state.chats[chat_id]
 
-    def _append_message(self, role: str, content: str):
+    def _append_message(self, role: str, content: str, model_used: str = "rag"):
         chat = self._get_active_chat()
         now_str = datetime.now().strftime("%H:%M")
         chat["messages"].append({
             "role": role,
             "content": content,
             "timestamp": now_str,
+            "model": model_used if role == "bot" else None,
         })
         st.session_state.chats[chat["id"]] = chat
 
@@ -301,7 +405,7 @@ class ChatbotInterface:
         active_id = st.session_state.active_chat_id
 
         if chats:
-            with st.container(height=300, border=False):
+            with st.container(height=200, border=False):
                 for chat in chats:
                     cid = chat["id"]
                     name = chat.get("name", "Untitled")
@@ -323,6 +427,58 @@ class ChatbotInterface:
                             st.session_state.active_chat_id = cid
                             st.rerun()
 
+        # Model Toggle Section
+        self._render_model_toggle()
+
+    def _render_model_toggle(self):
+        """Render the minimal model toggle at the bottom of sidebar."""
+        transformer_available = (
+            self.transformer_service is not None and 
+            self.transformer_service.is_loaded
+        )
+        
+        st.markdown(
+            "<div class='model-toggle-container'>"
+            "<p class='model-toggle-label'>AI Model</p>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        current_model = st.session_state.selected_model
+        
+        with col1:
+            if st.button("RAG", key="model_rag", use_container_width=True):
+                st.session_state.selected_model = "rag"
+                st.rerun()
+        
+        with col2:
+            if transformer_available:
+                if st.button("Transformer", key="model_transformer", use_container_width=True):
+                    st.session_state.selected_model = "transformer"
+                    st.rerun()
+            else:
+                st.button("Transformer", key="model_transformer_disabled", use_container_width=True, disabled=True)
+        
+        # Status indicator
+        if current_model == "rag":
+            st.markdown(
+                "<p style='font-size: 0.65rem; color: #2dd4bf; margin-top: 0.4rem; text-align: center;'>RAG Active</p>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                "<p style='font-size: 0.65rem; color: #a855f7; margin-top: 0.4rem; text-align: center;'>Transformer Active</p>",
+                unsafe_allow_html=True
+            )
+        
+        if not transformer_available:
+            st.markdown(
+                "<p style='font-size: 0.6rem; color: #64748b; margin-top: 0.3rem; text-align: center; font-style: italic;'>Transformer not loaded</p>",
+                unsafe_allow_html=True
+            )
+
     def _render_chat_window(self):
         active_chat = self._get_active_chat()
         chat_id = active_chat.get("id")
@@ -330,9 +486,7 @@ class ChatbotInterface:
         chat_created = active_chat.get("created_at", "")
         messages = active_chat.get("messages", [])
 
-        # Check if we're in rename mode
         if st.session_state.get("renaming_header") == chat_id:
-            # Show rename input
             col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
             with col1:
                 new_name = st.text_input("Rename chat", value=chat_name, key="rename_input")
@@ -351,7 +505,6 @@ class ChatbotInterface:
                     st.session_state.renaming_header = None
                     st.rerun()
         else:
-            # Normal header
             header_col1, header_col2, header_col3 = st.columns([0.70, 0.15, 0.15])
             
             with header_col1:
@@ -385,6 +538,7 @@ class ChatbotInterface:
                     role = msg["role"]
                     content = msg["content"]
                     timestamp = msg.get("timestamp", "")
+                    model_used = msg.get("model", "rag")
 
                     if role == "user":
                         st.markdown(
@@ -400,11 +554,14 @@ class ChatbotInterface:
                             unsafe_allow_html=True
                         )
                     else:
+                        avatar_class = "msg-bot-avatar transformer" if model_used == "transformer" else "msg-bot-avatar"
+                        avatar_text = "TF" if model_used == "transformer" else "AI"
+                        
                         st.markdown(
                             f"""<div class="msg-bot-container">
                                 <div class="msg-bot">
                                     <div class="msg-bot-inner">
-                                        <div class="msg-bot-avatar">AI</div>
+                                        <div class="{avatar_class}">{avatar_text}</div>
                                         <div class="msg-bot-content">{content}</div>
                                     </div>
                                     <div class="msg-bot-time">{timestamp}</div>
@@ -433,22 +590,42 @@ class ChatbotInterface:
             self._handle_user_query(user_input.strip())
 
     def _handle_user_query(self, query: str):
+        """Handle user query with proper model selection and parameters."""
         self._append_message("user", query)
+        
+        selected_model = st.session_state.selected_model
 
         try:
-            answer, new_backtest = self.rag.generate_answer(
-                user_question=query,
-                backtest_context=None,
-                fundamentals=None,
-            )
-            
-            if new_backtest:
-                st.session_state.current_backtest = new_backtest
-            
-            self._append_message("bot", answer)
+            if selected_model == "transformer":
+                if self.transformer_service and self.transformer_service.is_loaded:
+                    # Use SAME parameters as training script
+                    answer = self.transformer_service.generate_response(
+                        query,
+                        max_len=50,
+                        temperature=0.8,
+                        top_k=5
+                    )
+                else:
+                    answer = "Transformer model is not loaded. Please add 'wyckoff_chatbot.pth' to the project folder."
+                
+                self._append_message("bot", answer, model_used="transformer")
+            else:
+                # RAG model
+                answer, new_backtest = self.rag.generate_answer(
+                    user_question=query,
+                    backtest_context=None,
+                    fundamentals=None,
+                )
+                
+                if new_backtest:
+                    st.session_state.current_backtest = new_backtest
+                
+                self._append_message("bot", answer, model_used="rag")
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             answer = f"I encountered an issue: {str(e)}"
-            self._append_message("bot", answer)
+            self._append_message("bot", answer, model_used=selected_model)
 
         st.rerun()
