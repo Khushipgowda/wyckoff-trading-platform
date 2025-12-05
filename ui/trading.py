@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 
 from core.backtest import WyckoffBacktester
@@ -31,7 +32,6 @@ class TradingInterface:
         """Apply custom styles for the expander."""
         st.markdown("""
             <style>
-            /* Style the expander to match theme */
             .streamlit-expanderHeader {
                 background: rgba(30, 41, 59, 0.5) !important;
                 border: 1px solid rgba(148, 163, 184, 0.2) !important;
@@ -52,7 +52,6 @@ class TradingInterface:
                 border-radius: 0 0 8px 8px !important;
             }
             
-            /* Fix expander styling */
             [data-testid="stExpander"] {
                 background: transparent !important;
                 border: none !important;
@@ -97,16 +96,12 @@ class TradingInterface:
         
         if start_dt >= end_dt:
             return False, "Start date must be before end date"
-        
         if start_dt > today:
             return False, "Start date cannot be in the future"
-        
         if end_dt > today:
             return False, "End date cannot be in the future"
-        
         if (end_dt - start_dt).days < 30:
             return False, "Date range must be at least 30 days"
-        
         if (end_dt - start_dt).days > 365 * 10:
             return False, "Date range cannot exceed 10 years"
         
@@ -160,7 +155,6 @@ class TradingInterface:
                 st.write("")
                 run_btn = st.button("Run Analysis", use_container_width=True)
 
-        # Show date validation error if any
         if st.session_state.date_error:
             st.markdown(
                 f"""<div style="background: linear-gradient(135deg, rgba(251,191,36,0.1), rgba(245,158,11,0.05));
@@ -171,13 +165,12 @@ class TradingInterface:
                 unsafe_allow_html=True,
             )
 
-        # Strategy explanation - simplified, no buy-and-hold explanation
         with st.expander("About Wyckoff Strategy", expanded=False):
             st.markdown(
                 """
                 **How it works:**
                 
-                The strategy uses a 40-day rolling window to detect Wyckoff phases and generates signals based on:
+                The Wyckoff strategy uses a 40-day rolling window to detect Wyckoff phases and generates signals based on:
                 
                 - **Spring Test:** Price drops below the range low (support), then recovers above it with above-average volume. This indicates absorption of selling pressure.
                 
@@ -245,9 +238,8 @@ class TradingInterface:
                 )
             return
 
-        # Metrics
-        strategy_return = backtest.get('return', 0)
-        buyhold_return = backtest.get('buyhold_return', 0)
+        strategy_return = backtest.get("return", 0)
+        buyhold_return = backtest.get("buyhold_return", 0)
         outperformed = strategy_return > buyhold_return
         
         metrics = {
@@ -274,14 +266,13 @@ class TradingInterface:
         }
         render_metric_row(metrics)
 
-        # Performance comparison message
         diff = strategy_return - buyhold_return
         if outperformed:
             st.markdown(
                 f"""<div style="background: linear-gradient(135deg, rgba(16,185,129,0.1), rgba(34,197,94,0.05));
                     border: 1px solid rgba(16,185,129,0.3); border-radius: 8px; padding: 0.75rem 1rem;
                     margin: 0.5rem 0 1rem 0; font-size: 0.85rem; color: #10b981;">
-                    Strategy outperformed buy-and-hold by {diff:.2f} percentage points
+                    <strong>Wyckoff Strategy</strong> outperformed buy-and-hold by <strong>{diff:.2f}</strong> percentage points
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -290,15 +281,14 @@ class TradingInterface:
                 f"""<div style="background: linear-gradient(135deg, rgba(251,191,36,0.1), rgba(245,158,11,0.05));
                     border: 1px solid rgba(251,191,36,0.3); border-radius: 8px; padding: 0.75rem 1rem;
                     margin: 0.5rem 0 1rem 0; font-size: 0.85rem; color: #fbbf24;">
-                    Buy-and-hold outperformed strategy by {abs(diff):.2f} percentage points
+                    Buy-and-hold outperformed <strong>Wyckoff Strategy</strong> by <strong>{abs(diff):.2f}</strong> percentage points
                 </div>""",
                 unsafe_allow_html=True,
             )
 
-        # Signal statistics
-        springs = backtest.get('spring_signals', 0)
-        breakouts = backtest.get('breakout_signals', 0)
-        sharpe = backtest.get('sharpe_ratio', 0)
+        springs = backtest.get("spring_signals", 0)
+        breakouts = backtest.get("breakout_signals", 0)
+        sharpe = backtest.get("sharpe_ratio", 0)
         
         st.markdown(
             f"""
@@ -317,14 +307,17 @@ class TradingInterface:
             unsafe_allow_html=True,
         )
 
-        # Equity curve
-        eq_df = backtest.get("equity_curve")
+        indicator_data = backtest.get("indicator_data")
         symbol = backtest.get("symbol", "")
+        
+        if indicator_data is not None:
+            self._render_wyckoff_indicators_chart(indicator_data, symbol)
+
+        eq_df = backtest.get("equity_curve")
         
         if isinstance(eq_df, pd.DataFrame) and not eq_df.empty:
             self._render_equity_chart(eq_df, symbol)
 
-        # Trade history
         trades = backtest.get("trades", [])
         st.markdown(
             """
@@ -363,6 +356,129 @@ class TradingInterface:
         else:
             st.info("No trades generated. Market conditions may not have triggered Wyckoff signals.")
 
+    def _render_wyckoff_indicators_chart(self, df: pd.DataFrame, symbol: str):
+        """Render Wyckoff indicators chart with price and signals."""
+        
+        fig = go.Figure()
+        
+        # Price line
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["close"],
+                mode="lines",
+                name="Price",
+                line=dict(color="#22d3ee", width=2),
+                hovertemplate="$%{y:.2f}<extra></extra>"
+            )
+        )
+        
+        # Range High (Resistance)
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["range_high"],
+                mode="lines",
+                name="Resistance",
+                line=dict(color="rgba(239, 68, 68, 0.5)", width=1, dash="dot"),
+                hovertemplate="Resistance: $%{y:.2f}<extra></extra>"
+            )
+        )
+        
+        # Range Low (Support)
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["range_low"],
+                mode="lines",
+                name="Support",
+                line=dict(color="rgba(34, 197, 94, 0.5)", width=1, dash="dot"),
+                hovertemplate="Support: $%{y:.2f}<extra></extra>"
+            )
+        )
+        
+        # Spring Signals
+        spring_df = df[df["spring"] == True] if "spring" in df.columns else pd.DataFrame()
+        if not spring_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=spring_df["date"],
+                    y=spring_df["low"] * 0.98,
+                    mode="markers",
+                    name="Spring",
+                    marker=dict(
+                        symbol="triangle-up",
+                        size=14,
+                        color="#3b82f6",
+                    ),
+                    hovertemplate="Spring<br>$%{y:.2f}<extra></extra>"
+                )
+            )
+        
+        # Breakout Signals
+        breakout_df = df[df["breakout"] == True] if "breakout" in df.columns else pd.DataFrame()
+        if not breakout_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=breakout_df["date"],
+                    y=breakout_df["high"] * 1.02,
+                    mode="markers",
+                    name="Breakout",
+                    marker=dict(
+                        symbol="triangle-down",
+                        size=14,
+                        color="#f97316",
+                    ),
+                    hovertemplate="Breakout<br>$%{y:.2f}<extra></extra>"
+                )
+            )
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f"Wyckoff Signals - {symbol}",
+                y=0.98,
+                x=0.5,
+                xanchor="center",
+                yanchor="top",
+                font=dict(size=16, color="#e2e8f0")
+            ),
+            plot_bgcolor="rgba(15, 23, 42, 0.5)",
+            paper_bgcolor="rgba(15, 23, 42, 0.0)",
+            margin=dict(l=70, r=40, t=80, b=50),
+            height=450,
+            hovermode="x unified",
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.08,
+                xanchor="center",
+                x=0.5,
+                font=dict(size=11, color="#94a3b8"),
+                bgcolor="rgba(0,0,0,0)",
+            ),
+            xaxis=dict(
+                title=dict(text="Date", font=dict(size=12, color="#94a3b8")),
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.08)",
+                tickfont=dict(color="#64748b", size=10),
+                linecolor="rgba(148, 163, 184, 0.2)",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title=dict(text="Price ($)", font=dict(size=12, color="#94a3b8")),
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.08)",
+                tickfont=dict(color="#64748b", size=10),
+                tickprefix="$",
+                linecolor="rgba(148, 163, 184, 0.2)",
+                zeroline=False,
+            ),
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
     def _render_equity_chart(self, eq_df: pd.DataFrame, symbol: str):
         """Render equity curve with proper axis labels."""
         
@@ -382,35 +498,35 @@ class TradingInterface:
         )
         
         fig.update_layout(
-            title={
-                'text': f"Equity Curve - {symbol}",
-                'y': 0.95,
-                'x': 0.5,
-                'xanchor': 'center',
-                'yanchor': 'top',
-                'font': {'size': 16, 'color': '#e2e8f0'}
-            },
-            xaxis={
-                'title': {'text': 'Date', 'font': {'size': 14, 'color': '#94a3b8'}},
-                'showgrid': True,
-                'gridcolor': 'rgba(148, 163, 184, 0.1)',
-                'tickfont': {'color': '#94a3b8'},
-                'linecolor': 'rgba(148, 163, 184, 0.3)',
-            },
-            yaxis={
-                'title': {'text': 'Portfolio Value ($)', 'font': {'size': 14, 'color': '#94a3b8'}},
-                'showgrid': True,
-                'gridcolor': 'rgba(148, 163, 184, 0.1)',
-                'tickfont': {'color': '#94a3b8'},
-                'tickprefix': '$',
-                'tickformat': ',.0f',
-                'linecolor': 'rgba(148, 163, 184, 0.3)',
-            },
-            plot_bgcolor='rgba(15, 23, 42, 0.5)',
-            paper_bgcolor='rgba(15, 23, 42, 0.0)',
+            title=dict(
+                text=f"Wyckoff Strategy Equity Curve - {symbol}",
+                y=0.95,
+                x=0.5,
+                xanchor="center",
+                yanchor="top",
+                font=dict(size=16, color="#e2e8f0")
+            ),
+            xaxis=dict(
+                title=dict(text="Date", font=dict(size=14, color="#94a3b8")),
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.1)",
+                tickfont=dict(color="#94a3b8"),
+                linecolor="rgba(148, 163, 184, 0.3)",
+            ),
+            yaxis=dict(
+                title=dict(text="Portfolio Value ($)", font=dict(size=14, color="#94a3b8")),
+                showgrid=True,
+                gridcolor="rgba(148, 163, 184, 0.1)",
+                tickfont=dict(color="#94a3b8"),
+                tickprefix="$",
+                tickformat=",.0f",
+                linecolor="rgba(148, 163, 184, 0.3)",
+            ),
+            plot_bgcolor="rgba(15, 23, 42, 0.5)",
+            paper_bgcolor="rgba(15, 23, 42, 0.0)",
             margin=dict(l=80, r=40, t=60, b=60),
             height=400,
-            hovermode='x unified',
+            hovermode="x unified",
             showlegend=False,
         )
         

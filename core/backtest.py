@@ -49,11 +49,15 @@ class WyckoffBacktester:
         - equity curve
         - trade list
         - signal details for analysis
+        - indicator data for charting
         """
+        # Normalize dates (handle both / and - formats)
+        start_date = start_date.replace('/', '-')
+        end_date = end_date.replace('/', '-')
 
         df = self._load_price_data(symbol, start_date, end_date)
         if df.empty:
-            raise ValueError("No price data returned for this range/symbol.")
+            raise ValueError(f"No price data returned for {symbol}. Please check the symbol and date range.")
 
         df = self._apply_wyckoff_strategy(df)
 
@@ -65,6 +69,9 @@ class WyckoffBacktester:
         spring_count = df['spring'].sum() if 'spring' in df.columns else 0
         breakout_count = df['breakout'].sum() if 'breakout' in df.columns else 0
         exit_count = df['exit_signal'].sum() if 'exit_signal' in df.columns else 0
+
+        # Prepare indicator data for charting
+        indicator_data = self._prepare_indicator_data(df)
 
         result = {
             "symbol": symbol.upper(),
@@ -82,46 +89,143 @@ class WyckoffBacktester:
             "sharpe_ratio": metrics.get("sharpe_ratio", 0),
             "equity_curve": equity_curve,
             "trades": [t.__dict__ for t in trades],
+            "indicator_data": indicator_data,
             "price_data": df[['date', 'close', 'range_high', 'range_low']].to_dict('records') if 'range_high' in df.columns else None,
         }
 
         return result
 
     # ---------------------------------------------------------
-    # Data loader
+    # Prepare indicator data for charting
+    # ---------------------------------------------------------
+    def _prepare_indicator_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare indicator data for the Wyckoff indicators chart.
+        """
+        indicator_df = df[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+        
+        if 'range_high' in df.columns:
+            indicator_df['range_high'] = df['range_high']
+        if 'range_low' in df.columns:
+            indicator_df['range_low'] = df['range_low']
+        if 'vol_avg' in df.columns:
+            indicator_df['vol_avg'] = df['vol_avg']
+        if 'spring' in df.columns:
+            indicator_df['spring'] = df['spring']
+        if 'breakout' in df.columns:
+            indicator_df['breakout'] = df['breakout']
+        if 'exit_signal' in df.columns:
+            indicator_df['exit_signal'] = df['exit_signal']
+        
+        return indicator_df
+
+    # ---------------------------------------------------------
+    # Data loader (FIXED)
     # ---------------------------------------------------------
     def _load_price_data(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """
         Loads daily OHLCV data using yfinance.
+        Fixed to handle various yfinance quirks and column formats.
         """
-        data = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
-        if data is None or data.empty:
+        symbol = symbol.upper().strip()
+        
+        # Ensure dates are in correct format (YYYY-MM-DD)
+        start = start.replace('/', '-')
+        end = end.replace('/', '-')
+        
+        try:
+            # Method 1: Try using Ticker.history() first - more reliable
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(start=start, end=end, auto_adjust=True)
+            
+            if data is None or data.empty:
+                # Method 2: Fallback to yf.download()
+                print(f"Ticker.history() returned empty, trying yf.download()")
+                data = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+            
+            if data is None or data.empty:
+                print(f"No data returned for {symbol} from {start} to {end}")
+                return pd.DataFrame()
+            
+            # Handle multi-level columns if they exist (newer yfinance versions)
+            if isinstance(data.columns, pd.MultiIndex):
+                # Flatten multi-level columns by taking the first level
+                data.columns = data.columns.droplevel(1)
+            
+            # Reset index to make Date a column
+            data = data.reset_index()
+            
+            # Normalize column names to lowercase
+            rename_map = {}
+            for col in data.columns:
+                col_str = str(col)
+                col_lower = col_str.lower().strip()
+                
+                if col_lower in ('date', 'datetime', 'index'):
+                    rename_map[col] = 'date'
+                elif col_lower == 'open':
+                    rename_map[col] = 'open'
+                elif col_lower == 'high':
+                    rename_map[col] = 'high'
+                elif col_lower == 'low':
+                    rename_map[col] = 'low'
+                elif col_lower == 'close':
+                    rename_map[col] = 'close'
+                elif col_lower == 'volume':
+                    rename_map[col] = 'volume'
+                elif col_lower in ('adj close', 'adj_close', 'adjclose'):
+                    rename_map[col] = 'adj_close'
+            
+            data = data.rename(columns=rename_map)
+            
+            # Verify we have the date column
+            if 'date' not in data.columns:
+                # Try to find a datetime column
+                for col in data.columns:
+                    if pd.api.types.is_datetime64_any_dtype(data[col]):
+                        data = data.rename(columns={col: 'date'})
+                        break
+            
+            # Verify we have required columns
+            required = ['date', 'open', 'high', 'low', 'close', 'volume']
+            missing = [col for col in required if col not in data.columns]
+            
+            if missing:
+                print(f"Missing required columns: {missing}")
+                print(f"Available columns: {list(data.columns)}")
+                return pd.DataFrame()
+            
+            # Sort by date
+            data = data.sort_values("date").reset_index(drop=True)
+            
+            # Add adj_close if not present (since we use auto_adjust=True)
+            if 'adj_close' not in data.columns:
+                data['adj_close'] = data['close']
+            
+            # Ensure numeric types
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'adj_close']
+            for col in numeric_cols:
+                if col in data.columns:
+                    data[col] = pd.to_numeric(data[col], errors='coerce')
+            
+            # Drop rows with NaN values in critical columns
+            data = data.dropna(subset=['date', 'open', 'high', 'low', 'close', 'volume'])
+            
+            if data.empty:
+                print(f"Data became empty after cleaning for {symbol}")
+                return pd.DataFrame()
+            
+            print(f"Successfully loaded {len(data)} rows for {symbol}")
+            return data
+            
+        except Exception as e:
+            print(f"Error loading data for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
 
-        data = data.rename(
-            columns={
-                "Open": "open",
-                "High": "high",
-                "Low": "low",
-                "Close": "close",
-                "Volume": "volume",
-            }
-        )
-        
-        # Handle multi-level columns if they exist
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.droplevel(1)
-        
-        data = data.reset_index().rename(columns={"Date": "date"})
-        data = data.sort_values("date")
-        
-        # Add adj_close column (same as close since we used auto_adjust=True)
-        data["adj_close"] = data["close"]
-        
-        return data
-
     # ---------------------------------------------------------
-    # Wyckoff Strategy Logic (from your Jupyter notebook)
+    # Wyckoff Strategy Logic
     # ---------------------------------------------------------
     def _apply_wyckoff_strategy(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -181,12 +285,11 @@ class WyckoffBacktester:
         position_active = False
         entry_price = 0.0
         entry_date = None
-        equity = self.initial_capital
+        cash = self.initial_capital
+        shares = 0.0
 
         trades: List[Trade] = []
         equity_curve_rows = []
-
-        shares = 0.0
 
         for i, row in df.iterrows():
             signal = int(row["signal"]) if not isinstance(row["signal"], (int, np.integer)) else row["signal"]
@@ -198,7 +301,8 @@ class WyckoffBacktester:
                 position_active = True
                 entry_price = price
                 entry_date = date
-                shares = equity / price
+                shares = cash / price
+                cash = 0.0
 
             # Exit on sell signal
             elif position_active and signal == -1:
@@ -206,7 +310,8 @@ class WyckoffBacktester:
                 exit_date = date
                 pnl = (exit_price - entry_price) * shares
                 pnl_pct = (exit_price - entry_price) / entry_price * 100.0
-                equity += pnl
+                cash = shares * exit_price
+                shares = 0.0
 
                 trades.append(
                     Trade(
@@ -220,19 +325,17 @@ class WyckoffBacktester:
                     )
                 )
                 position_active = False
-                shares = 0.0
 
-            # Mark to market equity
+            # Calculate current equity
             if position_active:
-                equity_curve_rows.append({
-                    "date": date,
-                    "equity": shares * price,
-                })
+                current_equity = shares * price
             else:
-                equity_curve_rows.append({
-                    "date": date,
-                    "equity": equity,
-                })
+                current_equity = cash
+
+            equity_curve_rows.append({
+                "date": date,
+                "equity": current_equity,
+            })
 
         # Close open position at end
         if position_active and shares > 0:
@@ -243,7 +346,8 @@ class WyckoffBacktester:
             exit_date = date
             pnl = (exit_price - entry_price) * shares
             pnl_pct = (exit_price - entry_price) / entry_price * 100.0
-            equity += pnl
+            cash = shares * exit_price
+            
             trades.append(
                 Trade(
                     entry_date=entry_date,
@@ -255,7 +359,10 @@ class WyckoffBacktester:
                     pnl_pct=pnl_pct,
                 )
             )
-            equity_curve_rows[-1]["equity"] = equity
+            
+            # Update last equity value
+            if equity_curve_rows:
+                equity_curve_rows[-1]["equity"] = cash
 
         equity_curve = pd.DataFrame(equity_curve_rows).dropna()
         equity_curve = equity_curve.sort_values("date").reset_index(drop=True)
